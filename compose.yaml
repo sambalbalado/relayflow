@@ -1,0 +1,96 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: relayflow
+      POSTGRES_USER: relayflow
+      POSTGRES_PASSWORD: relayflow
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - relayflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relayflow -d relayflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      args:
+        TARGET: api
+    environment:
+      DATABASE_URL: postgres://relayflow:relayflow@db:5432/relayflow?sslmode=disable
+      HTTP_ADDRESS: :8080
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  worker-a:
+    build:
+      context: .
+      args:
+        TARGET: worker
+    environment:
+      DATABASE_URL: postgres://relayflow:relayflow@db:5432/relayflow?sslmode=disable
+      WORKER_ID: worker-a
+      POLL_INTERVAL: 100ms
+      LEASE_DURATION: 2s
+      HEARTBEAT_INTERVAL: 500ms
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker-b:
+    build:
+      context: .
+      args:
+        TARGET: worker
+    environment:
+      DATABASE_URL: postgres://relayflow:relayflow@db:5432/relayflow?sslmode=disable
+      WORKER_ID: worker-b
+      POLL_INTERVAL: 100ms
+      LEASE_DURATION: 2s
+      HEARTBEAT_INTERVAL: 500ms
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  loadgen:
+    profiles: ["tools"]
+    build:
+      context: .
+      args:
+        TARGET: loadgen
+    environment:
+      RELAYFLOW_URL: http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+
+  test:
+    profiles: ["tools"]
+    image: golang:1.23-alpine
+    working_dir: /src
+    volumes:
+      - .:/src
+    environment:
+      DATABASE_URL: postgres://relayflow:relayflow@db:5432/relayflow?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  relayflow-db:

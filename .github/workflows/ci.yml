@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - name: Formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Static analysis
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: relayflow
+          POSTGRES_USER: relayflow
+          POSTGRES_PASSWORD: relayflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relayflow -d relayflow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://relayflow:relayflow@localhost:5432/relayflow?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - name: PostgreSQL integration tests
+        run: go test -race -tags=integration ./internal/store
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose model
+        run: docker compose config --quiet
+      - name: Build runtime images
+        run: docker compose build api worker-a worker-b loadgen
